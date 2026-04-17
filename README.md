@@ -83,6 +83,13 @@ tgraph = tg.transform(X)
 tg.project_graph_layouts()
 ```
 
+## Output
+
+Example output for `notebooks/example.ipynb`:
+
+
+![TopOMetry pipeline example](topo/example.png)
+
 ## Changelog
 
 **v2.0.0** — Core-only release
