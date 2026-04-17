@@ -1066,7 +1066,7 @@ class TopOGraph(UoMMixin, BaseEstimator, TransformerMixin):
                     times=times,
                     r=r,
                     symmetric_hint=symmetric_hint,
-                    k_for_pf1=k_for_pf1,
+                    k_for_pf1=k_for_pf1,  # type: ignore
                 )
                 snap["metrics"] = {
                     k: float(v)
@@ -1136,7 +1136,7 @@ class TopOGraph(UoMMixin, BaseEstimator, TransformerMixin):
         color=None,
         *,
         multiscale: bool = True,
-        filename: str = None,
+        filename: str | None = None,
         point_size: float = 3.0,
         fps: int = 20,
         include_init_snapshot: bool = True,

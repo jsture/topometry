@@ -3,13 +3,12 @@
 
 import numpy as np
 import warnings
-from scipy.sparse import csr_matrix, issparse
+from scipy.sparse import issparse
 from sklearn.utils import check_random_state
 from sklearn.base import BaseEstimator, TransformerMixin
-from topo.utils._utils import get_indices_distances_from_sparse_matrix
+from topo.utils._utils import get_landmark_indices
 from topo.layouts.isomap import Isomap
 from topo.layouts.map import fuzzy_embedding
-from topo.utils._utils import get_landmark_indices
 from topo.spectral.eigen import spectral_layout
 from topo.base.ann import kNN
 from topo.tpgraph.kernels import Kernel
@@ -17,33 +16,20 @@ import logging
 
 # dumb warning, suggests lilmatrix but it doesnt work
 from scipy.sparse import SparseEfficiencyWarning
-warnings.simplefilter('ignore', SparseEfficiencyWarning)
+import importlib.util
 
-try:
-    import hnswlib
-    _have_hnswlib = True
-except ImportError:
-    _have_hnswlib = False
-try:
-    import nmslib
-    _have_nmslib = True
-except ImportError:
-    _have_nmslib = False
-try:
-    import annoy
-    _have_annoy = True
-except ImportError:
-    _have_annoy = False
-try:
-    import faiss
-    _have_faiss = True
-except ImportError:
-    _have_faiss = False
+warnings.simplefilter("ignore", SparseEfficiencyWarning)
+
+
+_have_hnswlib = importlib.util.find_spec("hnswlib") is not None
+_have_nmslib = importlib.util.find_spec("nmslib") is not None
+_have_annoy = importlib.util.find_spec("annoy") is not None
+_have_faiss = importlib.util.find_spec("faiss") is not None
 
 
 class Projector(BaseEstimator, TransformerMixin):
     """
-    A scikit-learn compatible class that handles all projection methods. 
+    A scikit-learn compatible class that handles all projection methods.
     Ideally, it takes in either a orthonormal eigenbasis or a graph kernel learned from such an eigenbasis.
     It is included in TopoMetry to allow custom `TopOGraph`-like pipelines (projection is the final step).
 
@@ -91,26 +77,27 @@ class Projector(BaseEstimator, TransformerMixin):
 
     """
 
-    def __init__(self,
-                n_components=2,
-                projection_method='MAP',
-                metric='euclidean',
-                n_neighbors=10,
-                n_jobs=1,
-                landmarks=None,
-                landmark_method='kmeans',
-                num_iters=800,
-                init='spectral',
-                nbrs_backend='hnswlib',
-                keep_estimator=False,
-                random_state=None,
-                verbose=False,
-                # ---- NEW: checkpointing passthrough to MAP ----
-                save_every=None,                 # int or None: store Y every `save_every` epochs
-                save_limit=None,                 # cap snapshots kept in memory
-                save_callback=None,              # callable(epoch:int, Y:np.ndarray) -> None
-                include_init_snapshot=True,      # store epoch=0 (post-init) snapshot
-                ):
+    def __init__(
+        self,
+        n_components=2,
+        projection_method="MAP",
+        metric="euclidean",
+        n_neighbors=10,
+        n_jobs=1,
+        landmarks=None,
+        landmark_method="kmeans",
+        num_iters=800,
+        init="spectral",
+        nbrs_backend="hnswlib",
+        keep_estimator=False,
+        random_state=None,
+        verbose=False,
+        # ---- NEW: checkpointing passthrough to MAP ----
+        save_every=None,  # int or None: store Y every `save_every` epochs
+        save_limit=None,  # cap snapshots kept in memory
+        save_callback=None,  # callable(epoch:int, Y:np.ndarray) -> None
+        include_init_snapshot=True,  # store epoch=0 (post-init) snapshot
+    ):
         self.n_components = n_components
         self.metric = metric
         self.n_neighbors = n_neighbors
@@ -138,66 +125,40 @@ class Projector(BaseEstimator, TransformerMixin):
         self.Y_aux_ = None
         self.checkpoints_ = None
 
-
     def __repr__(self):
         if self.Y_ is not None:
-            if self.metric == 'precomputed':
+            if self.metric == "precomputed":
                 msg = "Projector() estimator fitted with precomputed distance matrix"
             elif (self.N is not None) and (self.M is not None):
-                msg = "Projector() estimator fitted with %i samples and %i observations" % (self.N, self.M)
+                msg = (
+                    "Projector() estimator fitted with %i samples and %i observations"
+                    % (self.N, self.M)
+                )
         else:
             msg = "Kernel() estimator without any fitted data."
 
-        method_msg = " using %i" % self.projection_method
+        method_msg = " using %s" % self.projection_method
 
         msg = msg + method_msg
         return msg
 
     def _parse_backend(self):
-        if self.nbrs_backend == 'hnswlib':
-            if not _have_hnswlib:
-                if _have_nmslib:
-                    self.nbrs_backend == 'nmslib'
-                elif _have_annoy:
-                    self.nbrs_backend == 'annoy'
-                elif _have_faiss:
-                    self.nbrs_backend == 'faiss'
-                else:
-                    self.nbrs_backend == 'sklearn'
-        elif self.nbrs_backend == 'nmslib':
-            if not _have_nmslib:
-                if _have_hnswlib:
-                    self.nbrs_backend == 'hnswlib'
-                elif _have_annoy:
-                    self.nbrs_backend == 'annoy'
-                elif _have_faiss:
-                    self.nbrs_backend == 'faiss'
-                else:
-                    self.backend == 'sklearn'
-        elif self.nbrs_backend == 'annoy':
-            if not _have_annoy:
-                if _have_nmslib:
-                    self.nbrs_backend == 'nmslib'
-                elif _have_hnswlib:
-                    self.nbrs_backend == 'hnswlib'
-                elif _have_faiss:
-                    self.nbrs_backend == 'faiss'
-                else:
-                    self.nbrs_backend == 'sklearn'
-        elif self.nbrs_backend == 'faiss':
-            if not _have_faiss:
-                if _have_nmslib:
-                    self.nbrs_backend == 'nmslib'
-                elif _have_hnswlib:
-                    self.nbrs_backend == 'hnswlib'
-                elif _have_annoy:
-                    self.nbrs_backend == 'annoy'
-                else:
-                    self.nbrs_backend == 'sklearn'
-        else:
-            print(
-                "Warning: no approximate nearest neighbor library found. Using sklearn's KDTree instead.")
-            self.nbrs_backend == 'sklearn'
+        _fallback_order = [
+            ("hnswlib", _have_hnswlib),
+            ("nmslib", _have_nmslib),
+            ("annoy", _have_annoy),
+            ("faiss", _have_faiss),
+        ]
+        _have = {name: avail for name, avail in _fallback_order}
+        if not _have.get(self.nbrs_backend, False):
+            for name, avail in _fallback_order:
+                if avail and name != self.nbrs_backend:
+                    self.nbrs_backend = name
+                    return
+            warnings.warn(
+                "No approximate nearest-neighbor library found. Falling back to sklearn."
+            )
+            self.nbrs_backend = "sklearn"
 
     def fit(self, X, **kwargs):
         """
@@ -221,14 +182,19 @@ class Projector(BaseEstimator, TransformerMixin):
 
         # --- CHECKPOINTING KWARG HANDLING ---
         # Snapshot keys that only MAP understands
-        snapshot_keys = ("save_every", "save_limit", "save_callback", "include_init_snapshot")
+        snapshot_keys = (
+            "save_every",
+            "save_limit",
+            "save_callback",
+            "include_init_snapshot",
+        )
 
         if self.projection_method == "MAP":
             # 1) Accept any explicit kwarg overrides, but
             # 2) Fallback to constructor attributes if not provided in kwargs.
             map_checkpointing = {}
             for k in snapshot_keys:
-                if k in kwargs:                 # explicit call-time override
+                if k in kwargs:  # explicit call-time override
                     map_checkpointing[k] = kwargs.pop(k)
             # Fallbacks to instance attributes set in __init__
             if "save_every" not in map_checkpointing:
@@ -245,84 +211,117 @@ class Projector(BaseEstimator, TransformerMixin):
                 kwargs.pop(k, None)
             map_checkpointing = {}
         # Check inputs
-        if self.projection_method not in ['Isomap', 't-SNE', 'MAP', 'UMAP', 'PaCMAP', 'TriMAP', 'IsomorphicMDE', 'IsometricMDE', 'NCVis']:
+        if self.projection_method not in [
+            "Isomap",
+            "t-SNE",
+            "MAP",
+            "UMAP",
+            "PaCMAP",
+            "TriMAP",
+            "IsomorphicMDE",
+            "IsometricMDE",
+            "NCVis",
+        ]:
             raise ValueError(
-                '\'projection_method\' must be one of \'Isomap\', \'t-SNE\', \'MAP\', \'UMAP\', \'PaCMAP\', \'TriMAP\', \'IsomorphicMDE\', \'IsometricMDE\' or \'NCVis\'.')
+                "'projection_method' must be one of 'Isomap', 't-SNE', 'MAP', 'UMAP', 'PaCMAP', 'TriMAP', 'IsomorphicMDE', 'IsometricMDE' or 'NCVis'."
+            )
 
         if self.landmarks is not None:
             if isinstance(self.landmarks, int):
                 self.landmarks_ = get_landmark_indices(
-                    X, n_landmarks=self.landmarks, method=self.landmark_method, random_state=self.random_state)
+                    X,
+                    n_landmarks=self.landmarks,
+                    method=self.landmark_method,
+                    random_state=self.random_state,
+                )
             elif isinstance(self.landmarks, np.ndarray):
                 self.landmarks_ = self.landmarks
             else:
                 raise ValueError(
-                    '\'landmarks\' must be either an integer or a numpy array.')
+                    "'landmarks' must be either an integer or a numpy array."
+                )
 
         if isinstance(X, Kernel):
-            if self.landmarks_ is not None:
-                if self.projection_method != 'Isomap':
-                    self.N = self.landmarkds_
-                    K = X.P[self.landmarkds_, self.landmarkds_].copy()
+            self.M = X.M
+            if self.landmarks_ is not None and self.projection_method != "Isomap":
+                self.N = len(self.landmarks_)
+                K = X.P[np.ix_(self.landmarks_, self.landmarks_)].copy()
             else:
                 self.N = X.N
-            self.M = X.M
-            K = X.P.copy()
+                K = X.P.copy()
         else:
-            if self.metric != 'precomputed':
+            if self.metric != "precomputed":
                 if issparse(X):
                     X = X.toarray()
-                if self.landmarks_ is not None:
-                    if self.projection_method != 'Isomap':
-                        X = X[self.landmarkds_, :]
-                K = kNN(X, metric=self.metric, n_neighbors=self.n_neighbors
-                        , n_jobs=self.n_jobs, backend=self.nbrs_backend)
+                if self.landmarks_ is not None and self.projection_method != "Isomap":
+                    X = X[self.landmarks_, :]
+                K = kNN(
+                    X,
+                    metric=self.metric,
+                    n_neighbors=self.n_neighbors,
+                    n_jobs=self.n_jobs,
+                    backend=self.nbrs_backend,
+                )
             else:
-                if self.landmarks_ is not None:
-                    if self.projection_method != 'Isomap':
-                        K = X[self.landmarkds_, self.landmarkds_].copy()
-                    else:
-                        K = X.copy()
+                if self.landmarks_ is not None and self.projection_method != "Isomap":
+                    K = X[np.ix_(self.landmarks_, self.landmarks_)].copy()
                 else:
                     K = X.copy()
 
         if isinstance(self.init, np.ndarray):
             self.init_Y_ = self.init
         else:
-            if self.init == 'spectral':
+            if self.init == "spectral":
                 try:
                     self.init_Y_ = spectral_layout(
-                        K, self.n_components, self.random_state, laplacian_type='random_walk', eigen_tol=10e-4, return_evals=False)
-                except:
-                    print(
-                        'Multicomponent spectral layout initialization failed, falling back to simple spectral layout...')
+                        K,
+                        self.n_components,
+                        self.random_state,
+                        laplacian_type="random_walk",
+                        eigen_tol=10e-4,
+                        return_evals=False,
+                    )
+                except Exception:
+                    warnings.warn(
+                        "Multicomponent spectral layout initialization failed, falling back to simple spectral layout..."
+                    )
                     from topo.spectral.eigen import EigenDecomposition
-                    self.init_Y_ = EigenDecomposition(
-                        n_components=self.n_components).fit_transform(K)
-            else:
-                self.init_Y_ = self.random_state.randn(
-                    K.shape[0], self.n_components)
-        # Fit the desired method
-        if self.projection_method == 'Isomap':
-            self.Y_ = Isomap(K, n_components=self.n_components,
-                             n_neighbors=self.n_neighbors, metric='precomputed',
-                             landmarks=self.landmarks_,
-                             landmark_method=self.landmark_method,
-                             eig_tol=0, n_jobs=self.n_jobs)
 
-        elif self.projection_method == 't-SNE':
+                    self.init_Y_ = EigenDecomposition(
+                        n_components=self.n_components
+                    ).fit_transform(K)
+            else:
+                self.init_Y_ = self.random_state.randn(K.shape[0], self.n_components)
+        # Fit the desired method
+        if self.projection_method == "Isomap":
+            self.Y_ = Isomap(
+                K,
+                n_components=self.n_components,
+                n_neighbors=self.n_neighbors,
+                metric="precomputed",
+                landmarks=self.landmarks_,
+                landmark_method=self.landmark_method,
+                eig_tol=0,
+                n_jobs=self.n_jobs,
+            )
+
+        elif self.projection_method == "t-SNE":
             try:
                 from MulticoreTSNE import MulticoreTSNE as TSNE
+
                 _HAS_MCTSNE = True
             except ImportError:
                 _HAS_MCTSNE = False
             if not _HAS_MCTSNE:
                 from sklearn.manifold import TSNE
-            self.estimator_ = TSNE(n_components=self.n_components,
-                                   metric='precomputed', n_iter=self.num_iters)
+            self.estimator_ = TSNE(
+                n_components=self.n_components,
+                metric="precomputed",
+                n_iter=self.num_iters,
+            )
             self.Y_ = self.estimator_.fit_transform(X)
 
-        elif self.projection_method == 'MAP':
+        elif self.projection_method == "MAP":
             Y, Y_aux = fuzzy_embedding(
                 K,
                 n_components=self.n_components,
@@ -335,115 +334,170 @@ class Projector(BaseEstimator, TransformerMixin):
                 save_every=map_checkpointing.get("save_every", None),
                 save_limit=map_checkpointing.get("save_limit", None),
                 save_callback=map_checkpointing.get("save_callback", None),
-                include_init_snapshot=map_checkpointing.get("include_init_snapshot", True),
+                include_init_snapshot=map_checkpointing.get(
+                    "include_init_snapshot", True
+                ),
                 # any additional kwargs for fuzzy_embedding
-                **kwargs
+                **kwargs,
             )
             self.Y_ = Y
             self.aux_ = Y_aux
 
-
-
-        elif self.projection_method == 'UMAP':
+        elif self.projection_method == "UMAP":
             try:
                 import umap
             except ImportError:
                 raise ImportError(
-                    'UMAP is not installed. Please install UMAP with \'pip install umap\' before using this method.')
+                    "UMAP is not installed. Please install UMAP with 'pip install umap' before using this method."
+                )
+            # UMAP's precomputed_knn expects a (indices, distances) tuple, not a
+            # sparse matrix.  Convert K (CSR) to the required format.
+            if issparse(K):
+                n_pts = K.shape[0]
+                k_nbrs = K.getnnz() // n_pts
+                knn_indices = np.zeros((n_pts, k_nbrs), dtype=np.int32)
+                knn_dists = np.zeros((n_pts, k_nbrs), dtype=np.float32)
+                for i in range(n_pts):
+                    start, end = K.indptr[i], K.indptr[i + 1]
+                    knn_indices[i] = K.indices[start:end]
+                    knn_dists[i] = K.data[start:end]
+                precomputed_knn = (knn_indices, knn_dists)
+            elif isinstance(K, tuple):
+                precomputed_knn = K
+                k_nbrs = K[0].shape[1]
+            else:
+                precomputed_knn = K
+                k_nbrs = self.n_neighbors
             self.estimator_ = umap.UMAP(
-                n_components=self.n_components, precomputed_knn=K, init=self.init_Y_, n_epochs=self.num_iters, **kwargs)
+                n_components=self.n_components,
+                precomputed_knn=precomputed_knn,
+                n_neighbors=k_nbrs,
+                init=self.init_Y_,
+                n_epochs=self.num_iters,
+                **kwargs,
+            )
             self.Y_ = self.estimator_.fit_transform(X)
 
-        elif self.projection_method == 'PaCMAP':
+        elif self.projection_method == "PaCMAP":
             try:
                 import pacmap
             except ImportError:
                 raise ImportError(
-                    'PaCMAP is not installed. Please install PaCMAP with \'pip install pacmap\' before using this method.')
-            import warnings
+                    "PaCMAP is not installed. Please install PaCMAP with 'pip install pacmap' before using this method."
+                )
             logging.getLogger("pacmap").setLevel(logging.ERROR)
-            warnings.filterwarnings("ignore", category=UserWarning, module="pacmap")  # PaCMAP is way too verbose...
-            if self.metric == 'cosine':
-                metric = 'angular'
+            warnings.filterwarnings(
+                "ignore", category=UserWarning, module="pacmap"
+            )  # PaCMAP is way too verbose...
+            if self.metric == "cosine":
+                metric = "angular"
             else:
                 metric = self.metric
-            self.estimator_ = pacmap.PaCMAP(n_components=self.n_components, n_neighbors=self.n_neighbors,
-                                            apply_pca=False, distance=metric, num_iters=self.num_iters, verbose=self.verbose, **kwargs)
+            self.estimator_ = pacmap.PaCMAP(
+                n_components=self.n_components,
+                n_neighbors=self.n_neighbors,
+                apply_pca=False,
+                distance=metric,
+                num_iters=self.num_iters,
+                verbose=self.verbose,
+                **kwargs,
+            )
             self.Y_ = self.estimator_.fit_transform(X=X, init=self.init_Y_)
 
-        elif self.projection_method == 'TriMAP':
+        elif self.projection_method == "TriMAP":
             try:
                 import trimap
             except ImportError:
                 raise ImportError(
-                    'TriMAP is not installed. Please install TriMAP with \'pip install trimap\' before using this method.')
+                    "TriMAP is not installed. Please install TriMAP with 'pip install trimap' before using this method."
+                )
 
-            if self.metric == 'cosine':
-                metric = 'angular'
+            if self.metric == "cosine":
+                metric = "angular"
             else:
                 metric = self.metric
             self.estimator_ = trimap.TRIMAP(
-                n_dims=self.n_components, distance=self.metric, n_iters=self.num_iters, verbose=self.verbose, **kwargs)
+                n_dims=self.n_components,
+                distance=metric,
+                n_iters=self.num_iters,
+                verbose=self.verbose,
+                **kwargs,
+            )
             self.Y_ = self.estimator_.fit_transform(X=X, init=self.init_Y_)
 
-        elif self.projection_method == 'IsomorphicMDE':
+        elif self.projection_method == "IsomorphicMDE":
             try:
                 import pymde
-                from pymde import constraints, preprocess, problem, quadratic
-                from pymde.functions import losses
+                from pymde import preprocess
             except ImportError:
                 raise ImportError(
-                    'pymde is not installed. Please install pymde with \'pip install pymde\' before using this method.')
+                    "pymde is not installed. Please install pymde with 'pip install pymde' before using this method."
+                )
             attractive_penalty = pymde.penalties.Log1p
             repulsive_penalty = pymde.penalties.Log
             loss = pymde.losses.Absolute
             graph = preprocess.graph.Graph(K)
-            self.estimator_ = IsomorphicMDE(graph,
-                                            attractive_penalty=attractive_penalty,
-                                            repulsive_penalty=repulsive_penalty,
-                                            embedding_dim=self.n_components,
-                                            n_neighbors=self.n_neighbors,
-                                            init='quadratic',
-                                            verbose=self.verbose, **kwargs)
+            self.estimator_ = IsomorphicMDE(
+                graph,
+                attractive_penalty=attractive_penalty,
+                repulsive_penalty=repulsive_penalty,
+                embedding_dim=self.n_components,
+                n_neighbors=self.n_neighbors,
+                init="quadratic",
+                verbose=self.verbose,
+                **kwargs,
+            )
 
             self.Y_ = self.estimator_.embed(
-                max_iter=self.num_iters, memory_size=10, eps=10e-4, verbose=self.verbose)
+                max_iter=self.num_iters, memory_size=10, eps=10e-4, verbose=self.verbose
+            )
 
-        elif self.projection_method == 'IsometricMDE':
+        elif self.projection_method == "IsometricMDE":
             try:
                 import pymde
-                from pymde import constraints, preprocess, problem, quadratic
-                from pymde.functions import losses
+                from pymde import preprocess
             except ImportError:
                 raise ImportError(
-                    'pymde is not installed. Please install pymde with \'pip install pymde\' before using this method.')
+                    "pymde is not installed. Please install pymde with 'pip install pymde' before using this method."
+                )
             attractive_penalty = pymde.penalties.Log1p
             repulsive_penalty = pymde.penalties.Log
             loss = pymde.losses.Absolute
             graph = preprocess.graph.Graph(K)
             max_distance = 5e7
-            self.estimator_ = IsometricMDE(graph,
-                                           embedding_dim=self.n_components,
-                                           loss=loss,
-                                           constraint=None,
-                                           max_distances=max_distance,
-                                           verbose=self.verbose, **kwargs)
+            self.estimator_ = IsometricMDE(
+                graph,
+                embedding_dim=self.n_components,
+                loss=loss,
+                constraint=None,
+                max_distances=max_distance,
+                verbose=self.verbose,
+                **kwargs,
+            )
             self.Y_ = self.estimator_.embed(
-                max_iter=self.num_iters, memory_size=1, verbose=self.verbose)
+                max_iter=self.num_iters, memory_size=1, verbose=self.verbose
+            )
 
-        elif self.projection_method == 'NCVis':
+        elif self.projection_method == "NCVis":
             try:
                 import ncvis
             except ImportError:
                 raise ImportError(
-                    'ncvis is not installed. Please install ncvis with \'pip install ncvis\' before using this method.')
-            self.estimator_ = ncvis.NCVis(d=self.n_components, n_neighbors=self.n_neighbors,
-                                          distance=self.metric, n_epochs=self.num_iters, n_threads=self.n_jobs, **kwargs)
+                    "ncvis is not installed. Please install ncvis with 'pip install ncvis' before using this method."
+                )
+            self.estimator_ = ncvis.NCVis(
+                d=self.n_components,
+                n_neighbors=self.n_neighbors,
+                distance=self.metric,
+                n_epochs=self.num_iters,
+                n_threads=self.n_jobs,
+                **kwargs,
+            )
             self.Y_ = self.estimator_.fit_transform(X)
 
     def transform(self, X=None):
         """
-        Calls the transform method of the desired method. 
+        Calls the transform method of the desired method.
         If the desired method does not have a transform method, calls the results from the fit method.
 
         Returns
@@ -451,14 +505,14 @@ class Projector(BaseEstimator, TransformerMixin):
         Y : np.ndarray (n_samples, n_components).
             Projection results
         """
-        if self.projection_method == 'UMAP':
+        if self.projection_method == "UMAP":
             return self.estimator_.transform(X)
         else:
             return self.Y_
 
     def fit_transform(self, X, **kwargs):
         """
-        Calls the fit_transform method of the desired method. 
+        Calls the fit_transform method of the desired method.
         If the desired method does not have a fit_transform method, calls the results from the fit method.
 
         Returns
@@ -469,23 +523,19 @@ class Projector(BaseEstimator, TransformerMixin):
         self.fit(X, **kwargs)
 
         # For MAP, return aux so upstream can record checkpoints
-        if self.projection_method == 'MAP' and hasattr(self, 'aux_'):
-            return self.Y_, getattr(self, 'aux_', None)
+        if self.projection_method == "MAP" and hasattr(self, "aux_"):
+            return self.Y_, getattr(self, "aux_", None)
         else:
             return self.Y_
 
 
-
 # Check if pymde is installed
-try:
-    import pymde
-    _HAS_PYMDE = True
-except ImportError:
-    _HAS_PYMDE = False
+_HAS_PYMDE = importlib.util.find_spec("pymde") is not None
 
 
 # Define custom pymde problems
 if _HAS_PYMDE:
+
     def _remove_anchor_anchor_edges(edges, data, anchors):
         # exclude edges in which both items are anchors, since these
         # items are already pinned in place by the anchor constraint
@@ -498,22 +548,24 @@ if _HAS_PYMDE:
         data = data[neither_anchors_mask]
         return edges, data
 
-    def IsomorphicMDE(data,
-                      attractive_penalty=None,
-                      repulsive_penalty=None,
-                      embedding_dim=2,
-                      constraint=None,
-                      n_neighbors=None,
-                      repulsive_fraction=None,
-                      max_distance=None,
-                      init='quadratic',
-                      eps=1e-04,
-                      max_iter=100,
-                      memory_size=1,
-                      print_every=None,
-                      device='cpu',
-                      verbose=False,
-                      **kwargs):
+    def IsomorphicMDE(
+        data,
+        attractive_penalty=None,
+        repulsive_penalty=None,
+        embedding_dim=2,
+        constraint=None,
+        n_neighbors=None,
+        repulsive_fraction=None,
+        max_distance=None,
+        init="quadratic",
+        eps=1e-04,
+        max_iter=100,
+        memory_size=1,
+        print_every=None,
+        device="cpu",
+        verbose=False,
+        **kwargs,
+    ):
         # Inherits from pymde.recipes.preserve_neighbors()
         """
         Construct an MDE problem designed to preserve local structure.
@@ -575,7 +627,7 @@ if _HAS_PYMDE:
             Residual norm threshold; quit when the residual norm is smaller than eps.
         max_iter: int
             Maximum number of iterations.
-        memory_size : int 
+        memory_size : int
             The quasi-Newton memory. Larger values may lead to more stable behavior, but will increase the amount of time each iteration takes.
         print_every : int (optional)
             Print verbose output every print_every iterations.
@@ -588,18 +640,9 @@ if _HAS_PYMDE:
         pymde.MDE
             A ``pymde.MDE`` object, based on the original data.
         """
-        try:
-            import pymde
-            _have_pymde = True
-        except ImportError('pyMDE is needed for this embedding. Install it with `pip install pymde`'):
-            return print('pyMDE is needed for this embedding. Install it with `pip install pymde`')
-
         from pymde import constraints, preprocess, problem, quadratic
         from pymde.functions import penalties
-        try:
-            import torch
-        except ImportError('pytorch is needed for this embedding. Install it with `pip install pytorch`'):
-            return print('pyMDE is needed for this embedding. Install it with `pip install pymde`')
+        import torch
 
         if attractive_penalty is None:
             attractive_penalty = penalties.Log1p
@@ -663,9 +706,7 @@ if _HAS_PYMDE:
         elif init == "quadratic":
             if verbose:
                 problem.LOGGER.info("Computing quadratic initialization.")
-            X_init = quadratic.spectral(
-                n, embedding_dim, edges, weights, device=device
-            )
+            X_init = quadratic.spectral(n, embedding_dim, edges, weights, device=device)
             if not isinstance(
                 constraint, (constraints._Centered, constraints._Standardized)
             ):
@@ -692,9 +733,9 @@ if _HAS_PYMDE:
             # cannot sample more edges than there are available
             n_repulsive = min(n_repulsive, n_choose_2 - edges.shape[0])
 
-            negative_edges = preprocess.sample_edges(
-                n, n_repulsive, exclude=edges
-            ).to(device)
+            negative_edges = preprocess.sample_edges(n, n_repulsive, exclude=edges).to(
+                device
+            )
 
             negative_weights = -torch.ones(
                 negative_edges.shape[0], dtype=X_init.dtype, device=device
@@ -724,7 +765,7 @@ if _HAS_PYMDE:
             edges=edges,
             distortion_function=f,
             constraint=constraint,
-            device=device
+            device=device,
         )
         mde._X_init = X_init
 
@@ -742,13 +783,15 @@ if _HAS_PYMDE:
             )
         return mde
 
-    def IsometricMDE(data,
-                     embedding_dim=2,
-                     loss=None,
-                     constraint=None,
-                     max_distances=5e7,
-                     device="cpu",
-                     verbose=False):
+    def IsometricMDE(
+        data,
+        embedding_dim=2,
+        loss=None,
+        constraint=None,
+        max_distances=5e7,
+        device="cpu",
+        verbose=False,
+    ):
         # Inherits from pymde.recipes.preserve_distances()
         """
         Construct an MDE problem based on original distances.
@@ -807,18 +850,9 @@ if _HAS_PYMDE:
         pymde.MDE
             A ``pymde.MDE`` instance, based on preserving the original distances.
         """
-        try:
-            import pymde
-            _have_pymde = True
-        except ImportError('pyMDE is needed for this embedding. Install it with `pip install pymde`'):
-            return print('pyMDE is needed for this embedding. Install it with `pip install pymde`')
-
-        from pymde import constraints, preprocess, problem, quadratic
+        from pymde import constraints, preprocess, problem
         from pymde.functions import losses
-        try:
-            import torch
-        except ImportError('pytorch is needed for this embedding. Install it with `pip install pytorch`'):
-            return print('pyMDE is needed for this embedding. Install it with `pip install pymde`')
+        import torch
         from scipy.sparse import issparse
 
         if loss is None:

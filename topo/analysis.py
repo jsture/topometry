@@ -269,7 +269,7 @@ def riemann_diagnostics(
         if G is None:
             G = RiemannMetric(Y, L).get_rmetric()
             out["G"] = G
-        lam = np.linalg.eigvalsh(G)
+        lam = np.linalg.eigvalsh(G)  # type: ignore
         lam = np.clip(lam, 1e-12, None)
         out["anisotropy"] = np.log(lam[:, -1] / lam[:, 0])
         out["logdetG"] = np.sum(np.log(lam), axis=1)

@@ -1,11 +1,12 @@
 # Some other utility functions
 import numpy as np
-from scipy.sparse import coo_matrix, csr_matrix, issparse
+from scipy.sparse import coo_matrix, issparse
 from sklearn.utils import check_random_state
-from sklearn.decomposition import TruncatedSVD
 
 
-def get_landmark_indices(data, n_landmarks=1000, method='random', random_state=None, **kwargs):
+def get_landmark_indices(
+    data, n_landmarks=1000, method="random", random_state=None, **kwargs
+):
     """
     Select landmark indices from data.
 
@@ -33,12 +34,13 @@ def get_landmark_indices(data, n_landmarks=1000, method='random', random_state=N
         Row indices of the selected landmarks.
     """
     random_state = check_random_state(random_state)
-    if method == 'random':
+    if method == "random":
         all_idx = np.arange(np.shape(data)[0])
         return random_state.choice(all_idx, size=n_landmarks, replace=False)
-    elif method == 'kmeans':
+    elif method == "kmeans":
         from sklearn.cluster import MiniBatchKMeans
         from sklearn.metrics import pairwise_distances_argmin
+
         data_arr = np.asarray(data.todense() if issparse(data) else data)
         kmeans = MiniBatchKMeans(
             n_clusters=n_landmarks, random_state=random_state, **kwargs
@@ -50,7 +52,9 @@ def get_landmark_indices(data, n_landmarks=1000, method='random', random_state=N
         raise ValueError("Unknown landmark selection method; use 'random' or 'kmeans'.")
 
 
-def get_sparse_matrix_from_indices_distances(knn_indices, knn_dists, n_obs, n_neighbors):
+def get_sparse_matrix_from_indices_distances(
+    knn_indices, knn_dists, n_obs, n_neighbors
+):
     rows = np.zeros((n_obs * n_neighbors), dtype=int)
     cols = np.zeros((n_obs * n_neighbors), dtype=int)
     vals = np.zeros((n_obs * n_neighbors), dtype=float)
@@ -67,8 +71,7 @@ def get_sparse_matrix_from_indices_distances(knn_indices, knn_dists, n_obs, n_ne
             cols[i * n_neighbors + j] = knn_indices[i, j]
             vals[i * n_neighbors + j] = val
 
-    result = coo_matrix((vals, (rows, cols)),
-                        shape=(n_obs, n_obs))
+    result = coo_matrix((vals, (rows, cols)), shape=(n_obs, n_obs))
     result.eliminate_zeros()
     return result.tocsr()
 
@@ -100,10 +103,8 @@ def get_indices_distances_from_sparse_matrix(X, n_neighbors):
         row_data = X[row_id].data
         row_indices = X[row_id].indices
         if len(row_data) < n_neighbors:
-            raise ValueError(
-                "Some rows contain fewer than n_neighbors distances!"
-            )
-        row_nn_data_indices = np.argsort(row_data)[: n_neighbors]
+            raise ValueError("Some rows contain fewer than n_neighbors distances!")
+        row_nn_data_indices = np.argsort(row_data)[:n_neighbors]
         _knn_indices[row_id] = row_indices[row_nn_data_indices]
         _knn_dists[row_id] = row_data[row_nn_data_indices]
     return _knn_indices, _knn_dists

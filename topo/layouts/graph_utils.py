@@ -37,27 +37,20 @@
 
 import numpy as np
 from scipy.optimize import curve_fit
-from scipy.sparse import coo_matrix
 from sklearn.neighbors import KDTree
-from sklearn.neighbors import NearestNeighbors
-from topo.base import ann
 from topo.base import dists as dist
 from topo.spectral.umap_layouts import (
-    optimize_layout_euclidean, optimize_layout_generic, optimize_layout_inverse,
+    optimize_layout_euclidean,
+    optimize_layout_generic,
     _optimize_layout_euclidean_single_epoch,
 )
 from topo.spectral.eigen import spectral_layout
 from topo.tpgraph.fuzzy import fuzzy_simplicial_set
 from topo.utils.umap_utils import ts, fast_knn_indices
 
-try:
-    import joblib
-except ImportError:
-    # sklearn.externals.joblib is deprecated in 0.21, will be removed in 0.23. Try installing joblib.
-    from sklearn.externals import joblib
-
 INT32_MIN = np.iinfo(np.int32).min + 1
 INT32_MAX = np.iinfo(np.int32).max - 1
+
 
 def make_epochs_per_sample(weights, n_epochs):
     """Given a set of weights and number of epochs generate the number of
@@ -99,10 +92,10 @@ def simplicial_set_embedding(
     euclidean_output=True,
     parallel=True,
     verbose=False,
-    save_every=None,                 # int or None. If int>0, store Y every `save_every` epochs
-    save_limit=None,                 # optional cap on number of snapshots kept in-memory
-    save_callback=None,              # optional callable(epoch:int, Y:np.ndarray) -> None
-    include_init_snapshot=True,      # store epoch=0 (post-init) snapshot
+    save_every=None,  # int or None. If int>0, store Y every `save_every` epochs
+    save_limit=None,  # optional cap on number of snapshots kept in-memory
+    save_callback=None,  # optional callable(epoch:int, Y:np.ndarray) -> None
+    include_init_snapshot=True,  # store epoch=0 (post-init) snapshot
 ):
     """Perform a fuzzy simplicial set embedding (UMAP/MAP), optionally saving
     intermediate embeddings every few epochs.
@@ -190,7 +183,9 @@ def simplicial_set_embedding(
             graph, dim=n_components, random_state=random_state
         )
         expansion = 10.0 / np.abs(initialisation).max()
-        embedding = (initialisation * expansion).astype(np.float32) + random_state.normal(
+        embedding = (initialisation * expansion).astype(
+            np.float32
+        ) + random_state.normal(
             scale=0.0001, size=[graph.shape[0], n_components]
         ).astype(np.float32)
     else:
@@ -198,7 +193,7 @@ def simplicial_set_embedding(
         if len(init_data.shape) == 2:
             if np.unique(init_data, axis=0).shape[0] < init_data.shape[0]:
                 tree = KDTree(init_data)
-                dist_arr, ind = tree.query(init_data, k=2)
+                dist_arr, _ = tree.query(init_data, k=2)
                 nndist = np.mean(dist_arr[:, 1])
                 embedding = init_data + random_state.normal(
                     scale=0.001 * nndist, size=init_data.shape
@@ -228,8 +223,10 @@ def simplicial_set_embedding(
             k = tail[i]
             D = dists[j, k] * dists[j, k]
             mu = graph.data[i]
-            ro[j] += mu * D; ro[k] += mu * D
-            mu_sum[j] += mu; mu_sum[k] += mu
+            ro[j] += mu * D
+            ro[k] += mu * D
+            mu_sum[j] += mu
+            mu_sum[k] += mu
 
         epsilon = 1e-8
         ro = np.log(epsilon + (ro / mu_sum))
@@ -245,11 +242,14 @@ def simplicial_set_embedding(
 
     # Normalize box (unchanged)
     embedding = (
-        10.0 * (embedding - np.min(embedding, 0)) / (np.max(embedding, 0) - np.min(embedding, 0))
+        10.0
+        * (embedding - np.min(embedding, 0))
+        / (np.max(embedding, 0) - np.min(embedding, 0))
     ).astype(np.float32, order="C")
 
     # ----- NEW: checkpointing support -----
     checkpoints = []
+
     def _maybe_store(epoch, Y):
         """Store snapshot to memory and/or stream via callback."""
         if save_callback is not None:
@@ -276,17 +276,42 @@ def simplicial_set_embedding(
     if not save_every or int(save_every) <= 0:
         if euclidean_output:
             embedding = optimize_layout_euclidean(
-                embedding, embedding, head, tail, n_epochs, n_vertices,
-                epochs_per_sample, a, b, rng_state, gamma, initial_alpha,
-                negative_sample_rate, parallel=parallel, verbose=verbose,
-                densmap=densmap, densmap_kwds=densmap_kwds,
+                embedding,
+                embedding,
+                head,
+                tail,
+                n_epochs,
+                n_vertices,
+                epochs_per_sample,
+                a,
+                b,
+                rng_state,
+                gamma,
+                initial_alpha,
+                negative_sample_rate,
+                parallel=parallel,
+                verbose=verbose,
+                densmap=densmap,
+                densmap_kwds=densmap_kwds,
             )
         else:
             embedding = optimize_layout_generic(
-                embedding, embedding, head, tail, n_epochs, n_vertices,
-                epochs_per_sample, a, b, rng_state, gamma, initial_alpha,
-                negative_sample_rate, output_metric,
-                tuple(output_metric_kwds.values()), verbose=verbose,
+                embedding,
+                embedding,
+                head,
+                tail,
+                n_epochs,
+                n_vertices,
+                epochs_per_sample,
+                a,
+                b,
+                rng_state,
+                gamma,
+                initial_alpha,
+                negative_sample_rate,
+                output_metric,
+                tuple(output_metric_kwds.values()),
+                verbose=verbose,
             )
 
     else:
@@ -303,30 +328,33 @@ def simplicial_set_embedding(
 
         epochs_per_neg_sample = epochs_per_sample / negative_sample_rate
         epoch_of_next_neg_sample = epochs_per_neg_sample.copy()
-        epoch_of_next_sample    = epochs_per_sample.copy()
+        epoch_of_next_sample = epochs_per_sample.copy()
 
         # Compile the single-epoch kernel once (warm-up on first call)
         import numba
+
         _opt_epoch = numba.njit(
             _optimize_layout_euclidean_single_epoch, fastmath=True, parallel=parallel
         )
 
         # Densmap not supported in the checkpointed path (uncommon; fall back gracefully)
-        _densmap_active = bool(densmap) and densmap_kwds.get("lambda", 0) > 0
 
         # Dummy densmap arrays (used when densmap is off)
         _dens_phi_sum = np.zeros(1, dtype=np.float32)
-        _dens_re_sum  = np.zeros(1, dtype=np.float32)
+        _dens_re_sum = np.zeros(1, dtype=np.float32)
 
         for n in range(total_epochs):
             alpha = initial_alpha * (1.0 - float(n) / float(total_epochs))
 
             _opt_epoch(
-                embedding, embedding,
-                head, tail,
+                embedding,
+                embedding,
+                head,
+                tail,
                 n_vertices,
                 epochs_per_sample,
-                a, b,
+                a,
+                b,
                 rng_state,
                 gamma,
                 dim,
@@ -336,14 +364,16 @@ def simplicial_set_embedding(
                 epoch_of_next_neg_sample,
                 epoch_of_next_sample,
                 n,
-                False,          # densmap_flag — not supported here
+                False,  # densmap_flag — not supported here
                 _dens_phi_sum,
                 _dens_re_sum,
-                0.0, 0.0, 0.0,  # dens_re_cov, dens_re_std, dens_re_mean
-                0.0,            # dens_lambda
+                0.0,
+                0.0,
+                0.0,  # dens_re_cov, dens_re_std, dens_re_mean
+                0.0,  # dens_lambda
                 np.zeros(1, dtype=np.float32),  # dens_R
                 np.zeros(1, dtype=np.float32),  # dens_mu
-                0.0,            # dens_mu_tot
+                0.0,  # dens_mu_tot
             )
 
             if (n + 1) % save_every == 0:
@@ -354,7 +384,11 @@ def simplicial_set_embedding(
         if verbose:
             print(ts() + " Computing embedding densities")
 
-        (knn_indices, knn_dists, rp_forest,) = fast_knn_indices(
+        (
+            knn_indices,
+            knn_dists,
+            rp_forest,
+        ) = fast_knn_indices(
             embedding,
             densmap_kwds["n_neighbors"],
             metric,
@@ -391,20 +425,22 @@ def simplicial_set_embedding(
             k = tail_e[i]
             D = emb_dists[j, k]
             mu = emb_graph.data[i]
-            re[j] += mu * D; re[k] += mu * D
-            mu_sum[j] += mu; mu_sum[k] += mu
+            re[j] += mu * D
+            re[k] += mu * D
+            mu_sum[j] += mu
+            mu_sum[k] += mu
 
         epsilon = 1e-8
         re = np.log(epsilon + (re / mu_sum))
         aux_data["rad_emb"] = re
 
-    aux_data["initiasation"] = initialisation  # (kept for BC; note misspelling preserved)
+    aux_data["initiasation"] = (
+        initialisation  # (kept for BC; note misspelling preserved)
+    )
     if (save_every and int(save_every) > 0) or include_init_snapshot:
         aux_data["checkpoints"] = checkpoints
 
     return embedding, aux_data
-
-
 
 
 def find_ab_params(spread, min_dist):

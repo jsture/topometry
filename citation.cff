@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the article as below."
+authors:
+  - family-names: "Oliveira"
+    given-names: "David S"
+  - family-names: "Domingos"
+    given-names: "Ana I."
+  - family-names: "Velloso"
+    given-names: "Licio A"
+title: "TopOMetry"
+url: "https://github.com/davisidarta/topometry"
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "Oliveira"
+      given-names: "David S"
+    - family-names: "Domingos"
+      given-names: "Ana I."
+    - family-names: "Velloso"
+      given-names: "Licio A"
+  doi: "10.1101/2022.03.14.484134"
+  url: "https://www.biorxiv.org/content/early/2025/10/15/2022.03.14.484134"
+  journal: "bioRxiv"
+  publisher: "Cold Spring Harbor Laboratory"
+  title: "TopoMetry systematically learns and evaluates the latent geometry of single-cell data"
+  year: 2025

@@ -5,9 +5,10 @@
 
 import copy
 import warnings
+from typing import Any, Optional
+
 import numpy as np
 import scipy.sparse as sp
-from typing import Optional
 
 from topo.base.ann import kNN
 from topo.spectral.eigen import EigenDecomposition
@@ -79,62 +80,64 @@ def consolidate_macros(W, labels, max_iters=100):
     """Merge fragile macro-components using conductance outlier detection."""
     W = _to_float32_csr(W)
     labels = labels.copy()
-    it = 0
-    while it < max_iters:
-        it += 1
+    for _ in range(max_iters):
         uniq = np.unique(labels)
         if uniq.size <= 2:
             break
         deg = np.asarray(W.sum(axis=1)).ravel().astype(np.float64)
-        phi, idx_list = [], []
 
-        vols = [float(W[idx, :].sum()) for idx in idx_list]
-        med_vol = np.median(vols) if len(vols) else 0.0
-        tiny = [
-            i for i, v in enumerate(vols) if v < 0.6 * med_vol and len(idx_list[i]) > 0
-        ]
-
-        for t in tiny:
-            idx_t = idx_list[t]
-            best_neighbor, best_w = None, -1.0
-            for j, idx_other in enumerate(idx_list):
-                if j == t or len(idx_other) == 0:
-                    continue
-                w = float(W[np.ix_(idx_t, idx_other)].sum())
-                if w > best_w:
-                    best_w = w
-                    best_neighbor = j
-            if best_neighbor is not None:
-                labels[idx_t] = uniq[best_neighbor]
-        _, labels = np.unique(labels, return_inverse=True)
-
+        # Build per-component index lists, volumes, and conductances
+        idx_list, phi, vols = [], [], []
         for g in uniq:
             idx = np.where(labels == g)[0]
             idx_list.append(idx)
+            vols.append(float(W[idx, :].sum()))
             comp = W[np.ix_(idx, idx)]
-            internal = (comp.sum() - comp.diagonal().sum()).astype(np.float64)
-            ext = (deg[idx].sum() - 2.0 * internal).astype(np.float64)
-            phi.append(float(ext / (ext + 2.0 * internal + 1e-12)))
+            internal = float(comp.sum() - comp.diagonal().sum())
+            ext = float(deg[idx].sum() - 2.0 * internal)
+            phi.append(ext / (ext + 2.0 * internal + 1e-12))
+
         phi = np.array(phi, dtype=float)
-        if phi.size < 3:
+        merged = False
+
+        # Phase 1: merge tiny-volume components into their heaviest neighbour
+        med_vol = float(np.median(vols))
+        for i, (idx_t, vol) in enumerate(zip(idx_list, vols)):
+            if vol < 0.6 * med_vol and len(idx_t) > 0:
+                best_neighbor, best_w = None, -1.0
+                for j, idx_other in enumerate(idx_list):
+                    if j == i or len(idx_other) == 0:
+                        continue
+                    w = float(W[np.ix_(idx_t, idx_other)].sum())
+                    if w > best_w:
+                        best_w, best_neighbor = w, j
+                if best_neighbor is not None:
+                    labels[idx_t] = uniq[best_neighbor]
+                    merged = True
+
+        # Phase 2: conductance-based outlier merge
+        if phi.size >= 3:
+            q1, q3 = np.percentile(phi, [25, 75])
+            thr = q3 + 1.0 * (q3 - q1)
+            mask = phi > thr
+            if mask.any():
+                worst_pos = int(np.argmax(phi * mask))
+                idx_worst = idx_list[worst_pos]
+                best_neighbor, best_w = None, -1.0
+                for pos, idx_other in enumerate(idx_list):
+                    if pos == worst_pos:
+                        continue
+                    w = float(W[np.ix_(idx_worst, idx_other)].sum())
+                    if w > best_w:
+                        best_w, best_neighbor = w, uniq[pos]
+                if best_neighbor is not None:
+                    labels[idx_worst] = best_neighbor
+                    merged = True
+
+        if not merged:
             break
-        q1, q3 = np.percentile(phi, [25, 75])
-        thr = q3 + 1.0 * (q3 - q1)
-        mask = phi > thr
-        if not mask.any():
-            break
-        worst_pos = int(np.argmax(phi * mask))
-        idx_worst = idx_list[worst_pos]
-        best_neighbor, best_w = None, -1.0
-        for pos, idx_other in enumerate(idx_list):
-            if pos == worst_pos:
-                continue
-            w = float(W[np.ix_(idx_worst, idx_other)].sum())
-            if w > best_w:
-                best_w, best_neighbor = w, uniq[pos]
-        if best_neighbor is None:
-            break
-        labels[idx_worst] = best_neighbor
+        _, labels = np.unique(labels, return_inverse=True)
+
     _, labels_new = np.unique(labels, return_inverse=True)
     return labels_new
 
@@ -293,6 +296,65 @@ class UoMMixin:
     per-component fit pipeline used by ``TopOGraph.fit()``.
     """
 
+    # ------------------------------------------------------------------
+    # Interface contract — attributes supplied by the host class (TopOGraph).
+    # Declaring them here as class-level annotations tells static analysers
+    # (Pylance, mypy) that they exist on ``self`` without changing runtime
+    # behaviour.
+    # ------------------------------------------------------------------
+
+    # Core geometry
+    n: int
+    verbosity: int
+    random_state: Any
+
+    # kNN / kernel settings
+    backend: str
+    base_knn: int
+    base_metric: str
+    base_kernel_version: str
+    base_kernel: Any
+    graph_knn: int
+    graph_metric: str
+    graph_kernel_version: str
+
+    # Eigendecomposition settings
+    n_eigs: int
+    eigensolver: str
+    eigen_tol: float
+    diff_t: int
+
+    # Intrinsic-dimensionality estimation settings
+    id_method: str
+    id_ks: Any
+    id_metric: str
+    id_quantile: float
+    id_min_components: int
+    id_max_components: int
+    id_headroom: float
+
+    # Memory / caching
+    low_memory: bool
+    BaseKernelDict: dict
+    GraphKernelDict: dict
+
+    # Projection
+    projection_methods: Optional[list]
+
+    # Computed state (written by TopOGraph.fit before _fit_uom is called)
+    current_eigenbasis: str
+    eigenbasis: Any
+    n_jobs: int
+    _knn_Z: Any
+    _knn_msZ: Any
+    _kernel_Z: Any
+    _kernel_msZ: Any
+
+    # Methods provided by the host class
+    def _build_kernel(self, *args: Any, **kwargs: Any) -> Any: ...
+    def spectral_layout(self, *args: Any, **kwargs: Any) -> Any: ...
+    def project(self, *args: Any, **kwargs: Any) -> Any: ...
+
     def _init_uom_state(self):
         """Initialize all UoM-specific attributes (called from TopOGraph.__init__)."""
         self.uom = getattr(self, "uom", False)
@@ -323,6 +385,8 @@ class UoMMixin:
         self.P_of_Z_uom = None
         self.P_of_msZ_uom = None
         self._uom_axis_slices = None
+
+        self.verbosity = getattr(self, "verbosity", 0)
 
     # -----------------------------------------------------------------
     # Public component-finding method (delegates to module function)
