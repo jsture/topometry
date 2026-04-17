@@ -20,7 +20,6 @@ import importlib.util
 
 warnings.simplefilter("ignore", SparseEfficiencyWarning)
 
-
 _have_hnswlib = importlib.util.find_spec("hnswlib") is not None
 _have_nmslib = importlib.util.find_spec("nmslib") is not None
 _have_annoy = importlib.util.find_spec("annoy") is not None

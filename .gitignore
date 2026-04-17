@@ -17,7 +17,6 @@ venv/
 idea/
 
 # --- Jupyter ---
-*.ipynb
 .ipynb_checkpoints/
 
 # --- Large data / model files ---
@@ -62,6 +61,7 @@ cca_implementation_report.md
 # --- Test / cache ---
 .pytest_cache/
 data/
+!data/.gitkeep
 
 # --- Private docs (not for public Git) ---
 docs/LBO_Review/
